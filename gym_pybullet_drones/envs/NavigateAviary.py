@@ -25,15 +25,29 @@ class NavigateAviary(BaseRLAviary):
                  gui=False,
                  record=False,
                  obs: ObservationType=ObservationType.ALL,
-                 act: ActionType=ActionType.VEL
+                 act: ActionType=ActionType.VEL,
+                 difficulty: str='hard'
                  ):
                  
+        self.DIFFICULTY = difficulty  # 'easy', 'medium', or 'hard'
         self.TARGET_POS = np.array([2.0, 2.0, 1.0])
-        self.ARRIVAL_THRESHOLD = 0.15 # 15cm
-        self.EPISODE_LEN_SEC = 30
+        
+        if difficulty == 'easy':
+            self.ARRIVAL_THRESHOLD = 0.3
+            self.EPISODE_LEN_SEC = 15
+            self.BOUND_LIMIT_XY = 4.0
+        elif difficulty == 'medium':
+            self.ARRIVAL_THRESHOLD = 0.3   # Same as easy — keep success achievable
+            self.EPISODE_LEN_SEC = 20
+            self.BOUND_LIMIT_XY = 4.0
+        else:  # hard
+            self.ARRIVAL_THRESHOLD = 0.25
+            self.EPISODE_LEN_SEC = 30       # 30s allows comfortable long-distance flight (up to 4.8m)
+            self.BOUND_LIMIT_XY = 6.0       # Expands flight arena from 8x8m to 12x12m
         
         # Will be updated during resets
         self.prev_distance = 0.0
+        self.prev_dz = 0.0
         self.est_pos = np.zeros(2)
         
         # Overriding IMG_RES for depth camera to match plan (W=64, H=48)
@@ -43,6 +57,9 @@ class NavigateAviary(BaseRLAviary):
         self.action_buffer = deque(maxlen=4)
         for _ in range(4):
             self.action_buffer.append(np.zeros(4))
+            
+        if initial_xyzs is None:
+            initial_xyzs = np.array([[0.0, 0.0, 1.0]])
             
         super().__init__(drone_model=drone_model,
                          num_drones=1,
@@ -66,10 +83,13 @@ class NavigateAviary(BaseRLAviary):
         
     def _observationSpace(self):
         """ Custom dict observation space. """
-        return spaces.Dict({
-            "depth": spaces.Box(low=0.0, high=1.0, shape=(1, 48, 64), dtype=np.float32),
-            "state": spaces.Box(low=-np.inf, high=np.inf, shape=(15,), dtype=np.float32)
-        })
+        if self.OBS_TYPE == ObservationType.KIN:
+            return spaces.Box(low=-np.inf, high=np.inf, shape=(15,), dtype=np.float32)
+        else:
+            return spaces.Dict({
+                "depth": spaces.Box(low=0.0, high=1.0, shape=(1, 48, 64), dtype=np.float32),
+                "state": spaces.Box(low=-np.inf, high=np.inf, shape=(15,), dtype=np.float32)
+            })
 
     def _computeObs(self):
         """ Computes current observation (depth + state). """
@@ -79,15 +99,24 @@ class NavigateAviary(BaseRLAviary):
         # Convert PyBullet's non-linear OpenGL depth buffer to linear distance in meters
         near = self.L
         far = 1000.0
-        depth_linear = far * near / (far - (far - near) * dep)
+        dep_clamped = np.clip(np.nan_to_num(dep, nan=1.0, posinf=1.0, neginf=0.0), 0.0, 1.0)
+        denom = np.maximum(far - (far - near) * dep_clamped, 1e-4)
+        depth_linear = far * near / denom
         
         # Normalize depth to 0-1 range, clipping at 5 meters
         MAX_DEPTH = 5.0
-        dep_normalized = np.clip(depth_linear, 0, MAX_DEPTH) / MAX_DEPTH
+        dep_normalized = np.clip(depth_linear, 0.0, MAX_DEPTH) / MAX_DEPTH
         dep_tensor = np.expand_dims(dep_normalized, axis=0).astype(np.float32) # (1, 48, 64)
+        dep_tensor = np.nan_to_num(dep_tensor, nan=1.0, posinf=1.0, neginf=0.0)
         
-        # State vector
+        # [NEW] Blindfold the CNN in Easy Mode to guarantee it doesn't inject random noise
+        # Using 0.01 instead of exactly 0.0 to bypass a known PyTorch MPS bug where exact zero tensors cause NaNs in Conv2d
+        if self.DIFFICULTY == 'easy':
+            dep_tensor = np.full_like(dep_tensor, 0.01)
+        
+        # State vector (sanitized against physics engine numerical spikes)
         state = self._getDroneStateVector(0)
+        state = np.nan_to_num(state, nan=0.0, posinf=1.0, neginf=-1.0)
         
         # Extract ground truth state
         pos = state[0:3]
@@ -136,14 +165,17 @@ class NavigateAviary(BaseRLAviary):
             noisy_pos_xy[0], noisy_pos_xy[1],
             dx_body, dy_body, dz, dist, heading, 0.0
         ], dtype=np.float32)
+        obs_state = np.nan_to_num(obs_state, nan=0.0, posinf=1.0, neginf=-1.0)
         
+        if self.OBS_TYPE == ObservationType.KIN:
+            return obs_state
         return {"depth": dep_tensor, "state": obs_state}
         
     def _preprocessAction(self, action):
         """ Maps [-1, 1] 4D action to motor RPMs via PID tracking. """
         # Handle dict/vecenv formatting if needed
         # Since it's a single agent, it might come as shape (4,) or (1, 4)
-        target = action.flatten()
+        target = np.clip(np.nan_to_num(action.flatten(), nan=0.0, posinf=1.0, neginf=-1.0), -1.0, 1.0)
         
         # Action Delay
         self.action_buffer.append(target)
@@ -164,19 +196,24 @@ class NavigateAviary(BaseRLAviary):
         vy_world = vx_body * sin_yaw + vy_body * cos_yaw
         vz_world = ud
         
-        target_vel = self.SPEED_LIMIT * np.array([vx_world, vy_world, vz_world])
+        # Terminal approach velocity & yaw governor:
+        # Smoothly scales speed and yaw responsiveness down when close to the target,
+        # preventing violent high-speed overshoots, gyro swing, and tilt oscillations.
+        dist_to_target = np.linalg.norm(self.TARGET_POS - state[0:3])
+        speed_scale = float(np.clip(dist_to_target / 0.8, 0.25, 1.0))
+        yaw_scale = float(np.clip(dist_to_target / 0.5, 0.35, 1.0))
         
-        # Yaw rate: Tello positive is CW (negative Z rotation in right-hand rule)
-        # We'll map [-1, 1] to a max rotation rate (e.g. 1.0 rad/s)
-        # So target yaw = current yaw + (-yaw_rate * MAX_RATE * dt)
-        target_yaw = yaw - yaw_rate * 1.0 * self.CTRL_TIMESTEP
+        target_vel = (self.SPEED_LIMIT * speed_scale) * np.array([vx_world, vy_world, vz_world])
+        
+        # Yaw rate: agile at long range (3.0 rad/s), gentle near target (scaled down to ~1.0 rad/s)
+        target_yaw = yaw - yaw_rate * (3.0 * yaw_scale) * self.CTRL_TIMESTEP
         
         rpm, _, _ = self.ctrl[0].computeControl(control_timestep=self.CTRL_TIMESTEP,
                                                 cur_pos=state[0:3],
                                                 cur_quat=state[3:7],
                                                 cur_vel=state[10:13],
                                                 cur_ang_vel=state[13:16],
-                                                target_pos=state[0:3], # don't care about position tracking
+                                                target_pos=state[0:3] + target_vel * 0.5, # Carrot on a stick for proper PID P-term tracking
                                                 target_rpy=np.array([0, 0, target_yaw]),
                                                 target_vel=target_vel
                                                 )
@@ -185,26 +222,53 @@ class NavigateAviary(BaseRLAviary):
     def _addObstacles(self):
         """ Overrides BaseRLAviary to add randomized obstacles. """
         self.obstacle_ids = []
-        n_obstacles = np.random.randint(6, 10)
-        for _ in range(n_obstacles):
-            # Random position within bounds, avoiding start (0,0) and target
-            while True:
-                pos = [np.random.uniform(-3, 3), np.random.uniform(-3, 3), 0]
-                dist_start = np.linalg.norm(np.array(pos) - np.array([0,0,0]))
-                dist_target = np.linalg.norm(np.array(pos) - self.TARGET_POS)
-                if dist_start > 0.8 and dist_target > 0.8:
-                    break
-                    
+        if self.DIFFICULTY == 'easy':
+            obstacle_positions = []
+        elif self.DIFFICULTY == 'medium':
+            n_obstacles = np.random.randint(2, 5)   # 2-4 obstacles: gentle CNN training
+            obstacle_positions = []
+            for _ in range(n_obstacles):
+                while True:
+                    pos = [np.random.uniform(-3, 3), np.random.uniform(-3, 3), 1.0]
+                    dist_start = np.linalg.norm(np.array(pos[:2]) - np.array([0, 0]))
+                    dist_target = np.linalg.norm(np.array(pos[:2]) - self.TARGET_POS[:2])
+                    if dist_start > 0.8 and dist_target > 0.8:
+                        obstacle_positions.append(pos)
+                        break
+        else:  # hard: well-spaced, meaningful slalom obstacles along the flight corridor
+            start_xy = np.array([0.0, 0.0])
+            target_xy = self.TARGET_POS[0:2]
+            D = np.linalg.norm(target_xy - start_xy)
+            u = (target_xy - start_xy) / max(D, 1e-4)   # Unit vector along line of sight
+            u_perp = np.array([-u[1], u[0]])             # Perpendicular normal vector
+            
+            obstacle_positions = []
+            
+            # Staggered slalom layout (3 obstacles, spaced ~1.3m to 1.5m apart)
+            # Each obstacle directly interrupts straight flight, but leaves at least 1.5m - 2.0m of wide, open navigable airspace on the sides!
+            side1 = np.random.choice([-1, 1])
+            
+            # 1. Obstacle 1: at ~35% distance (~1.5m from start), offset slightly to one side
+            pos1 = start_xy + 0.35 * D * u + (side1 * 0.25) * u_perp
+            obstacle_positions.append([pos1[0], pos1[1], 1.0])
+            
+            # 2. Obstacle 2: at ~65% distance (~2.9m from start), offset to the opposite side
+            pos2 = start_xy + 0.65 * D * u - (side1 * 0.30) * u_perp
+            obstacle_positions.append([pos2[0], pos2[1], 1.0])
+            
+            # 3. Obstacle 3: at ~82% distance (~3.7m from start), offset near target zone
+            pos3 = start_xy + 0.82 * D * u + np.random.uniform(-0.15, 0.15) * u_perp
+            obstacle_positions.append([pos3[0], pos3[1], 1.0])
+
+        for pos in obstacle_positions:
             if np.random.random() > 0.5:
                 # Cylinder
                 shape = p.createCollisionShape(p.GEOM_CYLINDER, radius=0.15, height=2.0, physicsClientId=self.CLIENT)
                 visual = p.createVisualShape(p.GEOM_CYLINDER, radius=0.15, length=2.0, rgbaColor=[0.8, 0.2, 0.1, 1], physicsClientId=self.CLIENT)
-                pos[2] = 1.0 # center of 2.0 height
             else:
                 # Box
                 shape = p.createCollisionShape(p.GEOM_BOX, halfExtents=[0.2, 0.2, 1.0], physicsClientId=self.CLIENT)
                 visual = p.createVisualShape(p.GEOM_BOX, halfExtents=[0.2, 0.2, 1.0], rgbaColor=[0.9, 0.4, 0.1, 1], physicsClientId=self.CLIENT)
-                pos[2] = 1.0 # center of 2.0 height
                 
             obs_id = p.createMultiBody(baseMass=0, baseCollisionShapeIndex=shape,
                                        baseVisualShapeIndex=visual, basePosition=pos,
@@ -212,8 +276,8 @@ class NavigateAviary(BaseRLAviary):
             self.obstacle_ids.append(obs_id)
             
         # Draw a clean 3D green circle (wireframe sphere) using debug lines.
-        # This perfectly outlines the 0.15m arrival threshold and is completely invisible to the depth camera!
-        radius = 0.15
+        # Outlines the exact arrival threshold and is completely invisible to the depth camera!
+        radius = self.ARRIVAL_THRESHOLD
         segments = 16
         for i in range(segments):
             angle1 = 2 * np.pi * i / segments
@@ -251,12 +315,34 @@ class NavigateAviary(BaseRLAviary):
         distance = np.linalg.norm(self.TARGET_POS - pos)
         progress = self.prev_distance - distance
         
-        # REMOVED: reward = -distance * 0.1 (This caused the drone to suicide to avoid accumulating distance penalties)
+        # 1. 3D distance progress (meters closed in 3D toward target)
         reward = progress * 50.0
-        reward += max(0, 1.0 - distance) * 0.1
         
-        # Time penalty to create urgency (stop it from hovering forever)
-        reward -= 0.05
+        # 2. Dedicated Z-axis progress: strongly reward closing the vertical altitude gap!
+        dz = abs(self.TARGET_POS[2] - pos[2])
+        z_progress = self.prev_dz - dz
+        reward += z_progress * 30.0
+        self.prev_dz = dz
+        
+        # 3. Heading alignment: reward pointing camera at the target
+        yaw = state[9]
+        dx = self.TARGET_POS[0] - pos[0]
+        dy = self.TARGET_POS[1] - pos[1]
+        heading = np.arctan2(dy, dx) - yaw
+        heading = (heading + np.pi) % (2 * np.pi) - np.pi
+        reward += np.cos(heading) * 0.20
+        
+        # 4. Penalize excessive spinning so camera remains stable
+        yaw_rate = state[15]
+        reward -= abs(yaw_rate) * 0.02
+        
+        # 5. Time penalty: creates urgency to descend and hit the bullseye rather than hovering
+        reward -= 0.06
+        
+        # 6. Terminal deceleration incentive: discourage rushing at >0.4 m/s when close to target (<0.6m)
+        speed = np.linalg.norm(state[10:13])
+        if distance < 0.6 and speed > 0.4:
+            reward -= (speed - 0.4) * 0.5
         
         # We removed the dense tilt penalty because drones MUST pitch to move forward!
         # Penalizing pitch just teaches it to stay perfectly flat and hover in place.
@@ -264,7 +350,7 @@ class NavigateAviary(BaseRLAviary):
         if self._check_collision():
             reward -= 100.0
             
-        if abs(pos[0]) > 4.0 or abs(pos[1]) > 4.0 or pos[2] > 3.0:
+        if abs(pos[0]) > self.BOUND_LIMIT_XY or abs(pos[1]) > self.BOUND_LIMIT_XY or pos[2] > 3.0:
             reward -= 100.0
             
         if abs(state[7]) > 1.5 or abs(state[8]) > 1.5:
@@ -285,7 +371,7 @@ class NavigateAviary(BaseRLAviary):
         state = self._getDroneStateVector(0)
         if self._check_collision():
             return True
-        if abs(state[0]) > 4.0 or abs(state[1]) > 4.0 or state[2] > 3.0:
+        if abs(state[0]) > self.BOUND_LIMIT_XY or abs(state[1]) > self.BOUND_LIMIT_XY or state[2] > 3.0:
             return True
         if abs(state[7]) > 1.5 or abs(state[8]) > 1.5:
             return True
@@ -301,20 +387,39 @@ class NavigateAviary(BaseRLAviary):
 
     def reset(self, seed=None, options=None):
         # Randomize Target Position
-        self.TARGET_POS = np.array([
-            np.random.uniform(1.0, 3.0) * np.random.choice([-1, 1]),
-            np.random.uniform(1.0, 3.0) * np.random.choice([-1, 1]),
-            np.random.uniform(0.5, 1.5)
-        ])
+        if self.DIFFICULTY == 'easy':
+            # Target is closer and simpler
+            self.TARGET_POS = np.array([
+                np.random.uniform(0.5, 1.5) * np.random.choice([-1, 1]),
+                np.random.uniform(0.5, 1.5) * np.random.choice([-1, 1]),
+                np.random.uniform(0.8, 1.2)
+            ])
+        elif self.DIFFICULTY == 'medium':
+            # Moderate distances, same as easy range but CNN sees obstacles
+            self.TARGET_POS = np.array([
+                np.random.uniform(0.5, 2.0) * np.random.choice([-1, 1]),
+                np.random.uniform(0.5, 2.0) * np.random.choice([-1, 1]),
+                np.random.uniform(0.7, 1.3)
+            ])
+        else:
+            # Hard mode: long-range navigation (guaranteed 3.8m to 4.8m distance across 12x12m space)
+            theta = np.random.uniform(0, 2 * np.pi)
+            R = np.random.uniform(3.8, 4.8)
+            self.TARGET_POS = np.array([
+                R * np.cos(theta),
+                R * np.sin(theta),
+                np.random.uniform(0.8, 1.4)
+            ])
         
         # Reset estimates
         self.est_pos = np.zeros(2)
         
         obs, info = super().reset(seed=seed, options=options)
         
-        # Initialize prev distance
+        # Initialize prev distance and prev dz
         state = self._getDroneStateVector(0)
         self.prev_distance = np.linalg.norm(self.TARGET_POS - state[0:3])
+        self.prev_dz = abs(self.TARGET_POS[2] - state[2])
         
         # Fill action delay buffer
         delay_steps = np.random.randint(1, 4)
