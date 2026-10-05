@@ -32,16 +32,22 @@ class NavigateAviary(BaseRLAviary):
         self.DIFFICULTY = difficulty  # 'easy', 'medium', or 'hard'
         self.TARGET_POS = np.array([2.0, 2.0, 1.0])
         
+        # Physical Crazyflie dimensions:
+        # Arm length L = 0.0397m + propeller radius = 0.0231m + margin = ~0.08m
+        self.DRONE_RADIUS = 0.08
+        self.TARGET_RADIUS = 0.25  # Physical 25cm radius target zone
+        
         if difficulty == 'easy':
-            self.ARRIVAL_THRESHOLD = 0.3
+            self.ARRIVAL_THRESHOLD = 0.35
             self.EPISODE_LEN_SEC = 15
             self.BOUND_LIMIT_XY = 4.0
         elif difficulty == 'medium':
-            self.ARRIVAL_THRESHOLD = 0.3   # Same as easy — keep success achievable
+            self.ARRIVAL_THRESHOLD = 0.35
             self.EPISODE_LEN_SEC = 20
             self.BOUND_LIMIT_XY = 4.0
         else:  # hard
-            self.ARRIVAL_THRESHOLD = 0.25
+            # Arrival threshold accounts for drone body radius touching the 0.25m target zone
+            self.ARRIVAL_THRESHOLD = self.TARGET_RADIUS + self.DRONE_RADIUS  # 0.33m
             self.EPISODE_LEN_SEC = 30       # 30s allows comfortable long-distance flight (up to 4.8m)
             self.BOUND_LIMIT_XY = 6.0       # Expands flight arena from 8x8m to 12x12m
         
@@ -57,6 +63,7 @@ class NavigateAviary(BaseRLAviary):
         self.action_buffer = deque(maxlen=4)
         for _ in range(4):
             self.action_buffer.append(np.zeros(4))
+        self.prev_action = np.zeros(4)
             
         if initial_xyzs is None:
             initial_xyzs = np.array([[0.0, 0.0, 1.0]])
@@ -200,13 +207,13 @@ class NavigateAviary(BaseRLAviary):
         # Smoothly scales speed and yaw responsiveness down when close to the target,
         # preventing violent high-speed overshoots, gyro swing, and tilt oscillations.
         dist_to_target = np.linalg.norm(self.TARGET_POS - state[0:3])
-        speed_scale = float(np.clip(dist_to_target / 0.8, 0.25, 1.0))
-        yaw_scale = float(np.clip(dist_to_target / 0.5, 0.35, 1.0))
+        speed_scale = float(np.clip(dist_to_target / 0.8, 0.35, 1.0))
+        yaw_scale = float(np.clip(dist_to_target / 0.5, 0.40, 1.0))
         
         target_vel = (self.SPEED_LIMIT * speed_scale) * np.array([vx_world, vy_world, vz_world])
         
-        # Yaw rate: agile at long range (3.0 rad/s), gentle near target (scaled down to ~1.0 rad/s)
-        target_yaw = yaw - yaw_rate * (3.0 * yaw_scale) * self.CTRL_TIMESTEP
+        # Yaw rate: agile at long range (2.0 rad/s), gentle near target (~0.8 rad/s)
+        target_yaw = yaw - yaw_rate * (2.0 * yaw_scale) * self.CTRL_TIMESTEP
         
         rpm, _, _ = self.ctrl[0].computeControl(control_timestep=self.CTRL_TIMESTEP,
                                                 cur_pos=state[0:3],
@@ -235,7 +242,7 @@ class NavigateAviary(BaseRLAviary):
                     if dist_start > 0.8 and dist_target > 0.8:
                         obstacle_positions.append(pos)
                         break
-        else:  # hard: well-spaced, meaningful slalom obstacles along the flight corridor
+        else:  # hard: 3 well-spaced slalom obstacles along flight corridor with clean 1.2m+ runway
             start_xy = np.array([0.0, 0.0])
             target_xy = self.TARGET_POS[0:2]
             D = np.linalg.norm(target_xy - start_xy)
@@ -244,20 +251,24 @@ class NavigateAviary(BaseRLAviary):
             
             obstacle_positions = []
             
-            # Staggered slalom layout (3 obstacles, spaced ~1.3m to 1.5m apart)
-            # Each obstacle directly interrupts straight flight, but leaves at least 1.5m - 2.0m of wide, open navigable airspace on the sides!
+            # Staggered 3-gate slalom layout with a clear 1.2m+ runway and open terminal arrival zone:
+            # - Gate 1: at ~34% distance (1.2m - 1.5m ahead), offset by side1 * 0.52m
+            #   (Inside camera's 60° FOV; provides 1.3s runway to stabilize and initiate first bank)
+            # - Gate 2: at ~56% distance (2.0m - 2.5m ahead), offset by -side1 * 0.52m (counter-bank)
+            # - Gate 3: at ~76% distance (2.7m - 3.3m ahead), offset by side1 * 0.52m (final slalom turn)
+            # - Final 24% (~0.85m - 1.1m) is COMPLETELY CLEAR for terminal deceleration into the 0.25m bullseye!
             side1 = np.random.choice([-1, 1])
             
-            # 1. Obstacle 1: at ~35% distance (~1.5m from start), offset slightly to one side
-            pos1 = start_xy + 0.35 * D * u + (side1 * 0.25) * u_perp
+            # 1. Obstacle 1: at 34% distance, offset to one side
+            pos1 = start_xy + 0.34 * D * u + (side1 * 0.52) * u_perp
             obstacle_positions.append([pos1[0], pos1[1], 1.0])
             
-            # 2. Obstacle 2: at ~65% distance (~2.9m from start), offset to the opposite side
-            pos2 = start_xy + 0.65 * D * u - (side1 * 0.30) * u_perp
+            # 2. Obstacle 2: at 56% distance, offset to opposite side
+            pos2 = start_xy + 0.56 * D * u - (side1 * 0.52) * u_perp
             obstacle_positions.append([pos2[0], pos2[1], 1.0])
             
-            # 3. Obstacle 3: at ~82% distance (~3.7m from start), offset near target zone
-            pos3 = start_xy + 0.82 * D * u + np.random.uniform(-0.15, 0.15) * u_perp
+            # 3. Obstacle 3: at 76% distance, offset back to first side
+            pos3 = start_xy + 0.76 * D * u + (side1 * 0.52) * u_perp
             obstacle_positions.append([pos3[0], pos3[1], 1.0])
 
         for pos in obstacle_positions:
@@ -275,9 +286,12 @@ class NavigateAviary(BaseRLAviary):
                                        physicsClientId=self.CLIENT)
             self.obstacle_ids.append(obs_id)
             
+        # Clear previous debug visual lines to prevent physics memory buildup
+        p.removeAllUserDebugItems(physicsClientId=self.CLIENT)
+        
         # Draw a clean 3D green circle (wireframe sphere) using debug lines.
-        # Outlines the exact arrival threshold and is completely invisible to the depth camera!
-        radius = self.ARRIVAL_THRESHOLD
+        # Outlines the exact 0.25m target zone and is completely invisible to the depth camera!
+        radius = getattr(self, 'TARGET_RADIUS', 0.25)
         segments = 16
         for i in range(segments):
             angle1 = 2 * np.pi * i / segments
@@ -297,6 +311,14 @@ class NavigateAviary(BaseRLAviary):
             p1_yz = self.TARGET_POS + np.array([0, np.cos(angle1)*radius, np.sin(angle1)*radius])
             p2_yz = self.TARGET_POS + np.array([0, np.cos(angle2)*radius, np.sin(angle2)*radius])
             p.addUserDebugLine(p1_yz, p2_yz, lineColorRGB=[0.1, 1.0, 0.1], lineWidth=3, physicsClientId=self.CLIENT)
+            
+        # Ground vertical altitude stalk (shows exact 3D altitude without camera perspective illusion)
+        p.addUserDebugLine([self.TARGET_POS[0], self.TARGET_POS[1], 0.0], self.TARGET_POS, lineColorRGB=[0.2, 0.6, 1.0], lineWidth=2, physicsClientId=self.CLIENT)
+        
+        # Center bullseye crosshair (yellow, marks exact center coordinate)
+        p.addUserDebugLine(self.TARGET_POS - np.array([0.06, 0, 0]), self.TARGET_POS + np.array([0.06, 0, 0]), lineColorRGB=[1.0, 0.8, 0.0], lineWidth=3, physicsClientId=self.CLIENT)
+        p.addUserDebugLine(self.TARGET_POS - np.array([0, 0.06, 0]), self.TARGET_POS + np.array([0, 0.06, 0]), lineColorRGB=[1.0, 0.8, 0.0], lineWidth=3, physicsClientId=self.CLIENT)
+        p.addUserDebugLine(self.TARGET_POS - np.array([0, 0, 0.06]), self.TARGET_POS + np.array([0, 0, 0.06]), lineColorRGB=[1.0, 0.8, 0.0], lineWidth=3, physicsClientId=self.CLIENT)
         
     def _check_collision(self):
         for obs_id in getattr(self, 'obstacle_ids', []):
@@ -309,6 +331,17 @@ class NavigateAviary(BaseRLAviary):
             return True
         return False
         
+    def _get_min_obstacle_distance(self, max_search_dist=0.30):
+        """ Returns the closest geometric surface distance between the drone and any obstacle in meters. """
+        min_dist = max_search_dist
+        for obs_id in getattr(self, 'obstacle_ids', []):
+            pts = p.getClosestPoints(bodyA=self.DRONE_IDS[0], bodyB=obs_id, distance=max_search_dist, physicsClientId=self.CLIENT)
+            if pts:
+                dist = pts[0][8]
+                if dist < min_dist:
+                    min_dist = dist
+        return float(min_dist)
+
     def _computeReward(self):
         state = self._getDroneStateVector(0)
         pos = state[0:3]
@@ -343,6 +376,30 @@ class NavigateAviary(BaseRLAviary):
         speed = np.linalg.norm(state[10:13])
         if distance < 0.6 and speed > 0.4:
             reward -= (speed - 0.4) * 0.5
+            
+        # 7. Soft Repulsive Obstacle Cushion:
+        # Only penalize when dangerously close (<0.25m surface clearance).
+        # Normal corridor flight (clearance > 0.25m) receives zero penalty!
+        # Max penalty at surface contact is scaled down to -0.30 (preventing penalty drowning).
+        min_obs_dist = self._get_min_obstacle_distance(max_search_dist=0.25)
+        if min_obs_dist < 0.25:
+            reward -= ((0.25 - min_obs_dist) / 0.25) ** 2 * 0.30
+            
+        # 8. Action Smoothness / Jerk Penalty:
+        # Gentle penalty to promote stable flight paths without fighting necessary maneuvers
+        current_action = self.action_buffer[-1] if len(self.action_buffer) > 0 else np.zeros(4)
+        action_diff = np.linalg.norm(current_action - self.prev_action)
+        reward -= action_diff * 0.02
+        self.prev_action = current_action.copy()
+        
+        # 9. Penalize Flagrant Reverse Flight:
+        # Only penalize when far from target (>1.0m) and moving backwards aggressively (vx_body < -0.15 m/s).
+        # This prevents flying blind in reverse while fully exempting normal terminal braking/fine-tuning!
+        if distance > 1.0:
+            cos_yaw, sin_yaw = np.cos(yaw), np.sin(yaw)
+            vx_body = state[10] * cos_yaw + state[11] * sin_yaw
+            if vx_body < -0.15:
+                reward -= (abs(vx_body) - 0.15) * 0.20
         
         # We removed the dense tilt penalty because drones MUST pitch to move forward!
         # Penalizing pitch just teaches it to stay perfectly flat and hover in place.
@@ -402,17 +459,23 @@ class NavigateAviary(BaseRLAviary):
                 np.random.uniform(0.7, 1.3)
             ])
         else:
-            # Hard mode: long-range navigation (guaranteed 3.8m to 4.8m distance across 12x12m space)
+            # Hard mode: long-range 3-gate slalom navigation (3.6m to 4.6m distance across 12x12m space)
+            # Guarantees a clean >= 1.22m starting runway, balanced 0.85m slalom gaps, and ~1.0m terminal landing zone
             theta = np.random.uniform(0, 2 * np.pi)
-            R = np.random.uniform(3.8, 4.8)
+            R = np.random.uniform(3.6, 4.6)
             self.TARGET_POS = np.array([
                 R * np.cos(theta),
                 R * np.sin(theta),
-                np.random.uniform(0.8, 1.4)
+                np.random.uniform(0.8, 1.3)
             ])
         
         # Reset estimates
         self.est_pos = np.zeros(2)
+        
+        # Align drone nose directly to face the target at spawn
+        # Guarantees the forward-facing camera points directly down the flight corridor
+        yaw_to_target = np.arctan2(self.TARGET_POS[1], self.TARGET_POS[0])
+        self.INIT_RPYS = np.array([[0.0, 0.0, yaw_to_target]])
         
         obs, info = super().reset(seed=seed, options=options)
         
@@ -426,5 +489,6 @@ class NavigateAviary(BaseRLAviary):
         self.action_buffer = deque(maxlen=delay_steps)
         for _ in range(delay_steps):
             self.action_buffer.append(np.zeros(4))
+        self.prev_action = np.zeros(4)
             
         return obs, info

@@ -45,18 +45,53 @@ def run(gui=DEFAULT_GUI, record_video=DEFAULT_RECORD_VIDEO, output_folder=DEFAUL
     print('[INFO] Action space:', train_env.action_space)
     print('[INFO] Observation space:', train_env.observation_space)
     
-    # Custom policy kwargs for the slim MultiInputPolicy
-    # NOTE: No activation_fn override — uses SB3 default Tanh, which matches the working MlpPolicy
+    # Decouple Actor and Critic feature extractors to prevent Critic value loss from corrupting the Actor CNN
     policy_kwargs = dict(
         features_extractor_class=NavigateExtractor,
         features_extractor_kwargs=dict(cnn_output_dim=32),
-        share_features_extractor=True,
+        share_features_extractor=False,
         net_arch=[64, 64]
     )
     
     if resume_model is not None and os.path.exists(resume_model):
-        print(f"[INFO] Resuming training from {resume_model} with lr={lr}")
-        model = PPO.load(resume_model, env=train_env, tensorboard_log=filename+'/tb/', device="mps", custom_objects={"learning_rate": lr})
+        print(f"[INFO] Initializing decoupled Actor-Critic model and transferring weights from {resume_model} with lr={lr}...")
+        model = PPO("MultiInputPolicy",
+                    train_env,
+                    policy_kwargs=policy_kwargs,
+                    tensorboard_log=filename+'/tb/',
+                    device="mps",
+                    verbose=1,
+                    learning_rate=lr,
+                    n_steps=2048,
+                    batch_size=1024,
+                    n_epochs=10,
+                    vf_coef=0.05
+                    )
+        
+        # Load weights from resume checkpoint and transfer into decoupled architecture
+        old_model = PPO.load(resume_model, device="mps")
+        old_dict = old_model.policy.state_dict()
+        new_dict = model.policy.state_dict()
+        
+        transferred = 0
+        for k in new_dict.keys():
+            if k in old_dict and new_dict[k].shape == old_dict[k].shape:
+                new_dict[k] = old_dict[k].clone()
+                transferred += 1
+            elif 'vf_features_extractor' in k:
+                # Warm-start Critic's feature extractor with the old shared weights
+                old_k = k.replace('vf_features_extractor', 'features_extractor')
+                if old_k in old_dict and new_dict[k].shape == old_dict[old_k].shape:
+                    new_dict[k] = old_dict[old_k].clone()
+                    transferred += 1
+                    
+        model.policy.load_state_dict(new_dict)
+        print(f"[INFO] Successfully transferred {transferred}/{len(new_dict)} parameters into decoupled model.")
+        
+        # Reset exploration noise standard deviation to a disciplined value for fine-tuning
+        # (Default checkpoint retains std ≈ 0.85-0.90, which causes violent random twitching during rollouts and crash cascades)
+        model.policy.log_std.data.fill_(-1.2) # std ≈ 0.30
+        print("[INFO] Reset exploration noise std to ~0.30 (log_std = -1.2) for stable fine-tuning.")
     else:
         model = PPO("MultiInputPolicy",
                     train_env,
@@ -67,7 +102,8 @@ def run(gui=DEFAULT_GUI, record_video=DEFAULT_RECORD_VIDEO, output_folder=DEFAUL
                     learning_rate=lr,
                     n_steps=2048,
                     batch_size=1024,
-                    n_epochs=10
+                    n_epochs=10,
+                    vf_coef=0.05
                     )
     
     # [CRITICAL FIX] Freeze CNN parameters during Easy Mode
@@ -90,9 +126,10 @@ def run(gui=DEFAULT_GUI, record_video=DEFAULT_RECORD_VIDEO, output_folder=DEFAUL
                 unfrozen_count += param.numel()
         print(f"[INFO] Unfrozen {unfrozen_count:,} CNN parameters for Hard Mode")
                 
-    # callback_on_best = StopTrainingOnRewardThreshold(reward_threshold=150.0, verbose=1)
+    callback_on_best = StopTrainingOnRewardThreshold(reward_threshold=180.0, verbose=1)
     
     eval_callback = EvalCallback(eval_env,
+                                 callback_on_new_best=callback_on_best,
                                  verbose=1,
                                  best_model_save_path=filename+'/',
                                  log_path=filename+'/',
