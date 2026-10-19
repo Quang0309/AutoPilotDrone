@@ -84,6 +84,8 @@ def run(model_path=DEFAULT_MODEL_PATH, gui=DEFAULT_GUI, episodes=DEFAULT_EPISODE
     
     successes = 0
     collisions = 0
+    out_of_bounds = 0
+    timeouts = 0
     
     for ep in range(episodes):
         obs = test_env.reset()
@@ -91,22 +93,33 @@ def run(model_path=DEFAULT_MODEL_PATH, gui=DEFAULT_GUI, episodes=DEFAULT_EPISODE
         print(f"\n--- Episode {ep+1} ---")
         print(f"Target position: {base_env.TARGET_POS}")
         
+        # Cache target pos for this episode (before auto-reset overwrites it)
+        ep_target = base_env.TARGET_POS.copy()
+        
         for i in range(int((base_env.EPISODE_LEN_SEC) * base_env.CTRL_FREQ)):
             action, _states = model.predict(obs, deterministic=True)
             obs, reward, done, info = test_env.step(action)
             
+            # Determine status from the info dict
+            # Note: when done=True, DummyVecEnv auto-resets the env, so
+            # base_env state is already the NEW episode. Use info dict instead.
+            status = "NAVIGATING"
+            if done[0]:
+                inf = info[0]
+                if inf.get("success", False):
+                    status = "SUCCESS"
+                else:
+                    reason = inf.get("truncation_reason", "unknown")
+                    status_map = {
+                        "collision": "COLLISION",
+                        "out_of_bounds": "OUT OF BOUNDS",
+                        "flipped": "FLIPPED",
+                        "timeout": "TIMEOUT",
+                    }
+                    status = status_map.get(reason, "TRUNCATED")
+                        
             # Show live camera HUD
             if show_camera:
-                status = "NAVIGATING"
-                if done[0]:
-                    inf = info[0]
-                    if inf.get("success", False):
-                        status = "SUCCESS"
-                    elif inf.get("collision", False):
-                        status = "COLLISION"
-                    else:
-                        status = "TIMEOUT"
-                        
                 hud = create_hud(base_env, action[0], step=i+1, ep=ep+1, episodes=episodes, status=status)
                 cv2.imshow("Tello Drone Live Vision & Depth Perception", hud)
                 wait_time = 1 if not done[0] else 1000
@@ -134,23 +147,39 @@ def run(model_path=DEFAULT_MODEL_PATH, gui=DEFAULT_GUI, episodes=DEFAULT_EPISODE
             if done[0]:
                 inf = info[0]
                 if inf.get("success", False):
-                    print(f"Episode {ep+1} Finished: SUCCESS! Reached target.")
+                    print(f"Episode {ep+1} Finished: SUCCESS! Reached target. (dist={inf.get('distance', '?'):.2f}m)")
                     successes += 1
-                elif inf.get("collision", False):
-                    print(f"Episode {ep+1} Finished: COLLISION detected!")
-                    collisions += 1
                 else:
-                    print(f"Episode {ep+1} Finished: Truncated (timeout or out of bounds).")
+                    reason = inf.get("truncation_reason", "unknown")
+                    if reason == "collision":
+                        print(f"Episode {ep+1} Finished: COLLISION detected!")
+                        collisions += 1
+                    elif reason == "out_of_bounds":
+                        print(f"Episode {ep+1} Finished: OUT OF BOUNDS (left the cage).")
+                        out_of_bounds += 1
+                    elif reason == "flipped":
+                        print(f"Episode {ep+1} Finished: FLIPPED (excessive tilt).")
+                        out_of_bounds += 1
+                    elif reason == "timeout":
+                        print(f"Episode {ep+1} Finished: TIMEOUT (max time {base_env.EPISODE_LEN_SEC}s reached).")
+                        timeouts += 1
+                    else:
+                        print(f"Episode {ep+1} Finished: TRUNCATED (reason: {reason}).")
                 break
-                
+        else:
+            print(f"Episode {ep+1} Finished: TIMEOUT! Reached maximum step limit.")
+            timeouts += 1
+
     test_env.close()
     if show_camera:
         cv2.destroyAllWindows()
     
     print("\n--- Testing Summary ---")
     print(f"Total Episodes: {episodes}")
-    print(f"Successes: {successes} ({(successes/episodes)*100:.1f}%)")
-    print(f"Collisions: {collisions} ({(collisions/episodes)*100:.1f}%)")
+    print(f"Successes:      {successes} ({(successes/episodes)*100:.1f}%)")
+    print(f"Collisions:     {collisions} ({(collisions/episodes)*100:.1f}%)")
+    print(f"Out of Bounds:  {out_of_bounds} ({(out_of_bounds/episodes)*100:.1f}%)")
+    print(f"Timeouts:       {timeouts} ({(timeouts/episodes)*100:.1f}%)")
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Test trained NavigateAviary model')

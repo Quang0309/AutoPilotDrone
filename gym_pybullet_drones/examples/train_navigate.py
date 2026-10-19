@@ -65,6 +65,9 @@ def run(gui=DEFAULT_GUI, record_video=DEFAULT_RECORD_VIDEO, output_folder=DEFAUL
                     n_steps=2048,
                     batch_size=1024,
                     n_epochs=10,
+                    clip_range=0.15,
+                    target_kl=0.015,
+                    ent_coef=0.005,
                     vf_coef=0.05
                     )
         
@@ -103,38 +106,28 @@ def run(gui=DEFAULT_GUI, record_video=DEFAULT_RECORD_VIDEO, output_folder=DEFAUL
                     n_steps=2048,
                     batch_size=1024,
                     n_epochs=10,
+                    clip_range=0.15,
+                    target_kl=0.015,
+                    ent_coef=0.005,
                     vf_coef=0.05
                     )
     
-    # [CRITICAL FIX] Freeze CNN parameters during Easy Mode
-    # Zero-init only silences the CNN at step 0. Without freezing, gradients
-    # push the weights away from zero, causing the CNN to emit random noise
-    # that drowns out the compass signal — exactly the same failure mode.
-    if difficulty == 'easy':
-        frozen_count = 0
-        for name, param in model.policy.named_parameters():
-            if 'cnn' in name:
-                param.requires_grad = False
-                frozen_count += param.numel()
-        print(f"[INFO] Frozen {frozen_count:,} CNN parameters for Easy Mode")
-    else:
-        # Hard Mode: explicitly unfreeze CNN so it can learn from real depth
-        unfrozen_count = 0
-        for name, param in model.policy.named_parameters():
-            if 'cnn' in name:
-                param.requires_grad = True
-                unfrozen_count += param.numel()
-        print(f"[INFO] Unfrozen {unfrozen_count:,} CNN parameters for Hard Mode")
+    # CNN trains in all modes — unfrozen by default
+    unfrozen_count = 0
+    for name, param in model.policy.named_parameters():
+        if 'cnn' in name:
+            param.requires_grad = True
+            unfrozen_count += param.numel()
+    print(f"[INFO] CNN unfrozen ({unfrozen_count:,} parameters) — training depth features from scratch")
+
                 
-    callback_on_best = StopTrainingOnRewardThreshold(reward_threshold=180.0, verbose=1)
-    
+    n_eval_episodes = 15 if difficulty == 'hard' else 10
     eval_callback = EvalCallback(eval_env,
-                                 callback_on_new_best=callback_on_best,
                                  verbose=1,
                                  best_model_save_path=filename+'/',
                                  log_path=filename+'/',
                                  eval_freq=int(5000 / n_envs),
-                                 n_eval_episodes=10,
+                                 n_eval_episodes=n_eval_episodes,
                                  deterministic=True,
                                  render=False)
                                  
@@ -154,7 +147,7 @@ def run(gui=DEFAULT_GUI, record_video=DEFAULT_RECORD_VIDEO, output_folder=DEFAUL
     # Evaluation
     print("[INFO] Evaluating the trained model...")
     best_model = PPO.load(filename+'/best_model.zip')
-    mean_reward, std_reward = evaluate_policy(best_model, eval_env, n_eval_episodes=10)
+    mean_reward, std_reward = evaluate_policy(best_model, eval_env, n_eval_episodes=n_eval_episodes)
     print(f"[INFO] Mean Reward: {mean_reward} +/- {std_reward}")
     
 if __name__ == '__main__':
