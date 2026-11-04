@@ -1,0 +1,4 @@
+level,selected_transitions,evaluation_episodes,success_rate,collision_rate,out_of_bounds_rate,mean_reward,model
+easy,40000,100,1.00,0.00,0.00,48.5036,models/best_sac_easy.zip
+medium,300000,100,0.93,0.05,0.02,30.2256,models/best_sac_medium.zip
+hard,150000,100,0.94,0.06,0.00,41.1356,models/best_sac_hard.zip
