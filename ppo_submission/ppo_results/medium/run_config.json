@@ -1,0 +1,9 @@
+{
+  "stage": "medium",
+  "target_steps": 400000,
+  "source_timesteps": 500000,
+  "source_model": "models/best_ppo_easy.zip",
+  "source_sha256": "cf4b929f0c5ae18250ff03c343618c8958f98e164df4b965ff8c7ac55153ffda",
+  "initialization": "previous passed stage",
+  "learning_rate": 0.0001
+}

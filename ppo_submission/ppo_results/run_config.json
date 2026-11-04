@@ -1,0 +1,17 @@
+{
+  "output": "ppo_results",
+  "steps": [
+    500000,
+    400000,
+    300000
+  ],
+  "n_envs": 8,
+  "eval_interval": 20000,
+  "resume": false,
+  "repository": "..",
+  "started_at": "2026-10-23T13:28:21.984151+11:00",
+  "reference": "../example_training_mimic_uts.ipynb",
+  "device": "cpu",
+  "seed": 42,
+  "transition": "minimum target steps + 100/100 screening + independent 100/100 validation"
+}

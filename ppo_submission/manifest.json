@@ -1,0 +1,148 @@
+{
+  "baseline_repository": "Quang0309/AutoPilotDrone",
+  "baseline_branch": "quangn/reward_modify_test",
+  "baseline_commit": "799227688c2ff1d873a3e3e72bf8a9003041b942",
+  "historical_training_base_commit": "4b27cc771764a2337e62c346d446dc47ea8b4738",
+  "training_run": "2026-10-23",
+  "notes": [
+    "Three validated stage checkpoints retain their original bytes.",
+    "Raw evaluations, progress CSVs and validation records retain their original bytes.",
+    "Three run configuration files have paths adjusted for this folder layout.",
+    "Only logs needed by the notebook are included; raw monitor CSVs and duplicate checkpoints remain local.",
+    "The runner is repackaged to use the parent environment and submission-local PID reset/extractor."
+  ],
+  "files": [
+    {
+      "path": "models/best_ppo_easy.zip",
+      "source_path": "result/easy/best_model.zip",
+      "original_sha256": "cf4b929f0c5ae18250ff03c343618c8958f98e164df4b965ff8c7ac55153ffda",
+      "sha256": "cf4b929f0c5ae18250ff03c343618c8958f98e164df4b965ff8c7ac55153ffda"
+    },
+    {
+      "path": "ppo_results/easy/evaluations.jsonl",
+      "source_path": "result/easy/evaluations.jsonl",
+      "original_sha256": "7183e5942364f9e7c0bf79175e4aa8e4133c5558f669f19e5adcaedf39e474d0",
+      "sha256": "7183e5942364f9e7c0bf79175e4aa8e4133c5558f669f19e5adcaedf39e474d0"
+    },
+    {
+      "path": "ppo_results/easy/run_config.json",
+      "source_path": "result/easy/run_config.json",
+      "original_sha256": "57efd95e93c238b83e5aabe9ee05fd95c3b70736ed78f8ed4ec5715b790f796b",
+      "sha256": "57efd95e93c238b83e5aabe9ee05fd95c3b70736ed78f8ed4ec5715b790f796b"
+    },
+    {
+      "path": "ppo_results/easy/validation.json",
+      "source_path": "result/easy/validation.json",
+      "original_sha256": "c6598ab3d56a949dfc29ef693198d33eee5047be390288900b2d437417ce0be4",
+      "sha256": "c6598ab3d56a949dfc29ef693198d33eee5047be390288900b2d437417ce0be4"
+    },
+    {
+      "path": "ppo_results/easy/progress.csv",
+      "source_path": "result/easy/segments/20261023_133022/progress.csv",
+      "original_sha256": "07f82fc3751d83433d8e2327903180a88456f0c3a830474eaa18bb55b68e8520",
+      "sha256": "07f82fc3751d83433d8e2327903180a88456f0c3a830474eaa18bb55b68e8520"
+    },
+    {
+      "path": "models/best_ppo_medium.zip",
+      "source_path": "result/medium/best_model.zip",
+      "original_sha256": "fd4d78dff6b12f5de0fbecacb11b3ed75aec668ed1e4173cc397770729c3b820",
+      "sha256": "fd4d78dff6b12f5de0fbecacb11b3ed75aec668ed1e4173cc397770729c3b820"
+    },
+    {
+      "path": "ppo_results/medium/evaluations.jsonl",
+      "source_path": "result/medium/evaluations.jsonl",
+      "original_sha256": "3c7d027f9a01f59258765323dbe6e7a15549809387a91da2308748ca1e264477",
+      "sha256": "3c7d027f9a01f59258765323dbe6e7a15549809387a91da2308748ca1e264477"
+    },
+    {
+      "path": "ppo_results/medium/run_config.json",
+      "source_path": "result/medium/run_config.json",
+      "original_sha256": "5cc34fce34b6eac1359132420d5b74b60ab6ed5c46c7cb8b6ed8f0ae7e410642",
+      "sha256": "0281e7ef8f12c59e5b9572ac013208b8a3e712444a3a0d777f384b2c0036e670"
+    },
+    {
+      "path": "ppo_results/medium/validation.json",
+      "source_path": "result/medium/validation.json",
+      "original_sha256": "88a8114bcfe2d9ec5953d709522df14e8553ec8be0b34c9081afef5ceae90959",
+      "sha256": "88a8114bcfe2d9ec5953d709522df14e8553ec8be0b34c9081afef5ceae90959"
+    },
+    {
+      "path": "ppo_results/medium/validation_attempt_0001.json",
+      "source_path": "result/medium/validation_attempt_0001.json",
+      "original_sha256": "792c54ff652a1c56ccd97093f06f55685da60206d818c94657ae9df0f5089098",
+      "sha256": "792c54ff652a1c56ccd97093f06f55685da60206d818c94657ae9df0f5089098"
+    },
+    {
+      "path": "ppo_results/medium/validation_attempt_0002.json",
+      "source_path": "result/medium/validation_attempt_0002.json",
+      "original_sha256": "c5e935cd1aa16a9c5afd9f9330bffd527d318c1b1ee6a418296e16065bdb3d27",
+      "sha256": "c5e935cd1aa16a9c5afd9f9330bffd527d318c1b1ee6a418296e16065bdb3d27"
+    },
+    {
+      "path": "ppo_results/medium/validation_attempt_0003.json",
+      "source_path": "result/medium/validation_attempt_0003.json",
+      "original_sha256": "415ceb9dca4e3d645645908ba7dd80a704be266c6ce03e91bc1174acf99a2df1",
+      "sha256": "415ceb9dca4e3d645645908ba7dd80a704be266c6ce03e91bc1174acf99a2df1"
+    },
+    {
+      "path": "ppo_results/medium/progress.csv",
+      "source_path": "result/medium/progress.csv",
+      "original_sha256": "761a4640a9fe6d08da463f50368f3645205bf1fc1e1a1858fbb64d678f230c82",
+      "sha256": "761a4640a9fe6d08da463f50368f3645205bf1fc1e1a1858fbb64d678f230c82"
+    },
+    {
+      "path": "models/best_ppo_hard.zip",
+      "source_path": "result/hard/best_model.zip",
+      "original_sha256": "826a3956fb51f1b9ccea27b2469bfddb7a8e117b5957775446baa9febc0e6fee",
+      "sha256": "826a3956fb51f1b9ccea27b2469bfddb7a8e117b5957775446baa9febc0e6fee"
+    },
+    {
+      "path": "ppo_results/hard/evaluations.jsonl",
+      "source_path": "result/hard/evaluations.jsonl",
+      "original_sha256": "ba5aea8af7555cf32d28a1da4267e572fb6d7573223cac5683961c67921e34f6",
+      "sha256": "ba5aea8af7555cf32d28a1da4267e572fb6d7573223cac5683961c67921e34f6"
+    },
+    {
+      "path": "ppo_results/hard/run_config.json",
+      "source_path": "result/hard/run_config.json",
+      "original_sha256": "d668008bb3003740afd1be6b8fb20fe5cc5384e422314e7ae8ccd8f08e3e583e",
+      "sha256": "b6f82c076ff30a5042cff8063b340b237d2920998aa40fa66d8085d0653bd2a5"
+    },
+    {
+      "path": "ppo_results/hard/validation.json",
+      "source_path": "result/hard/validation.json",
+      "original_sha256": "7962140d9ec60ba50ead25007e6c855809d592bd8a538b81e2672eb2f2612906",
+      "sha256": "7962140d9ec60ba50ead25007e6c855809d592bd8a538b81e2672eb2f2612906"
+    },
+    {
+      "path": "ppo_results/hard/validation_attempt_0001.json",
+      "source_path": "result/hard/validation_attempt_0001.json",
+      "original_sha256": "18f346d8b701179d6060114988f7e47408c2b9e88b281884d69cf6434f60ac24",
+      "sha256": "18f346d8b701179d6060114988f7e47408c2b9e88b281884d69cf6434f60ac24"
+    },
+    {
+      "path": "ppo_results/hard/progress.csv",
+      "source_path": "result/hard/progress.csv",
+      "original_sha256": "e1ec27f0d005bde5f8514c5d7cff09de81bcb5c9acfec7d46612a806c3c3edb8",
+      "sha256": "e1ec27f0d005bde5f8514c5d7cff09de81bcb5c9acfec7d46612a806c3c3edb8"
+    },
+    {
+      "path": "ppo_results/run_config.json",
+      "source_path": "result/run_config.json",
+      "original_sha256": "21472d6fe3be679caada035a3bc588f90fd4fffc2827e35d2f93b157749beca1",
+      "sha256": "84c757b1688b47b9bf05e8cfc02ecf25b3c4a92e684a8a8568eed4a4c79d174b"
+    },
+    {
+      "path": "ppo_results/status.json",
+      "source_path": "result/status.json",
+      "original_sha256": "b2a07f0e7d1f4ec9c8cb0eb9be5379a9205d6309b4f33194e03c28425700badb",
+      "sha256": "b2a07f0e7d1f4ec9c8cb0eb9be5379a9205d6309b4f33194e03c28425700badb"
+    },
+    {
+      "path": "ppo_results/versions.json",
+      "source_path": "result/versions.json",
+      "original_sha256": "3e327ec880446ba9c3f85a1e8d59ec4233fb3724aaa9b781096b50bc7fb5ad29",
+      "sha256": "3e327ec880446ba9c3f85a1e8d59ec4233fb3724aaa9b781096b50bc7fb5ad29"
+    }
+  ]
+}

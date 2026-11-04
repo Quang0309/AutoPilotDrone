@@ -1,0 +1,9 @@
+{
+  "stage": "easy",
+  "target_steps": 500000,
+  "source_timesteps": 0,
+  "source_model": null,
+  "source_sha256": null,
+  "initialization": "random weights",
+  "learning_rate": 0.0001
+}
